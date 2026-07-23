@@ -1,13 +1,15 @@
 import type { DraftPick } from "@/types/draft";
 
 type TeamColumnProps = {
-  teamNumber: number;
+  teamName: string;
+  draftPosition: number;
   picks: DraftPick[];
   isCurrentTeam: boolean;
 };
 
 export function TeamColumn({
-  teamNumber,
+  teamName,
+  draftPosition,
   picks,
   isCurrentTeam,
 }: TeamColumnProps) {
@@ -19,8 +21,14 @@ export function TeamColumn({
           : "border-slate-700 bg-slate-900"
       }`}
     >
-      <div className="flex items-center justify-between">
-        <h3 className="font-bold">Team {teamNumber}</h3>
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-xs text-slate-400">
+            Draft position {draftPosition}
+          </p>
+
+          <h3 className="font-bold">{teamName}</h3>
+        </div>
 
         {isCurrentTeam && (
           <span className="rounded bg-yellow-400 px-2 py-1 text-xs font-bold text-black">
@@ -37,12 +45,12 @@ export function TeamColumn({
         ) : (
           picks.map((pick) => (
             <article
-              key={pick.pickNumber}
+              key={pick.id}
               className="rounded-lg bg-slate-800 p-3"
             >
               <p className="text-xs text-slate-400">
-                Pick {pick.pickNumber} · Round{" "}
-                {pick.roundNumber}
+                Pick {pick.pick_number} · Round{" "}
+                {pick.round_number}
               </p>
 
               <p className="mt-1 font-semibold">
