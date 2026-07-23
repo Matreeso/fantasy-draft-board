@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { PlayerList } from "@/components/PlayerList";
+import { supabase } from "@/lib/supabase/client";
 import type {
   DraftPick,
   DraftTeam,
@@ -47,6 +48,9 @@ export function DraftBoard({
   const [errorMessage, setErrorMessage] =
     useState<string | null>(null);
 
+    const [realtimeStatus, setRealtimeStatus] =
+    useState("CONNECTING");
+
   /*
    * If real teams were loaded from Supabase, use them.
    * Otherwise, create temporary Team 1, Team 2, etc. objects.
@@ -73,6 +77,80 @@ export function DraftBoard({
   }, [draftId, initialTeams, teamCount]);
 
   const actualTeamCount = teams.length;
+
+  useEffect(() => {
+    const channel = supabase
+      .channel(`draft-${draftId}-picks`)
+      .on(
+        "postgres_changes",
+        {
+          event: "INSERT",
+          schema: "public",
+          table: "picks",
+          filter: `draft_id=eq.${draftId}`,
+        },
+        (payload) => {
+          const insertedPick = payload.new as {
+            id: number;
+            draft_id: number;
+            draft_team_id: number;
+            player_id: number;
+            pick_number: number;
+            round_number: number;
+            created_at: string;
+          };
+  
+          const player = initialPlayers.find(
+            (candidate) =>
+              candidate.id === insertedPick.player_id,
+          );
+  
+          const draftTeam = teams.find(
+            (candidate) =>
+              candidate.id === insertedPick.draft_team_id,
+          );
+  
+          if (!player || !draftTeam) {
+            console.error(
+              "Realtime pick is missing its player or team.",
+              insertedPick,
+            );
+  
+            return;
+          }
+  
+          const completePick: DraftPick = {
+            ...insertedPick,
+            player,
+            draftTeam,
+          };
+  
+          setPicks((currentPicks) => {
+            const pickAlreadyExists = currentPicks.some(
+              (pick) => pick.id === completePick.id,
+            );
+  
+            if (pickAlreadyExists) {
+              return currentPicks;
+            }
+  
+            return [...currentPicks, completePick].sort(
+              (firstPick, secondPick) =>
+                firstPick.pick_number -
+                secondPick.pick_number,
+            );
+          });
+        },
+      )
+      .subscribe((status) => {
+        console.log("Draft Realtime status:", status);
+        setRealtimeStatus(status);
+      });
+  
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [draftId, initialPlayers, teams]);
 
   /*
    * Find the highest existing pick number.
@@ -226,6 +304,21 @@ export function DraftBoard({
   return (
     <div>
       <header className="flex flex-col gap-4 border-b border-slate-800 pb-6 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex items-center gap-2 text-sm">
+            <span
+              className={`h-2.5 w-2.5 rounded-full ${
+                realtimeStatus === "SUBSCRIBED"
+                  ? "bg-green-400"
+                  : "bg-yellow-400"
+              }`}
+            />
+
+            <span className="text-slate-400">
+              {realtimeStatus === "SUBSCRIBED"
+                ? "Live updates connected"
+                : "Connecting to live updates"}
+            </span>
+        </div>
         <div>
           <h1 className="text-4xl font-bold">
             Fantasy Draft Board
