@@ -10,6 +10,7 @@ import type {
   DraftPick,
   DraftTeam,
   Player,
+  DraftMember,
 } from "@/types/draft";
 
 type PickRow = {
@@ -29,11 +30,12 @@ type LoadPicksResponse = {
 };
 
 type DraftBoardProps = {
-  draftId: number;
-  initialPlayers: Player[];
-  initialPicks?: DraftPick[];
-  initialTeams?: DraftTeam[];
-  teamCount?: number;
+    draftId: number;
+    initialPlayers: Player[];
+    initialPicks?: DraftPick[];
+    initialTeams?: DraftTeam[];
+    teamCount?: number;
+    currentMember: DraftMember;
 };
 
 type UndoPickResponse = {
@@ -70,6 +72,7 @@ export function DraftBoard({
   initialPicks = [],
   initialTeams = [],
   teamCount = 4,
+  currentMember,
 }: DraftBoardProps) {
     const supabase = useMemo(
         () => createClient(),
@@ -313,6 +316,19 @@ export function DraftBoard({
       team.draft_position === currentDraftPosition,
   );
 
+  const isCommissioner =
+  currentMember.role === "commissioner";
+
+const isSpectator =
+  currentMember.role === "spectator";
+
+const ownsCurrentTeam =
+  currentMember.role === "team_owner" &&
+  currentMember.draft_team_id === currentTeam?.id;
+
+const canDraft =
+  isCommissioner || ownsCurrentTeam;
+
   /*
    * Remove drafted players from the available-player list.
    */
@@ -457,18 +473,22 @@ export function DraftBoard({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
-            <button
-              type="button"
-              onClick={undoLastPick}
-              disabled={
-                picks.length === 0 ||
-                isUndoing ||
-                isSubmitting
-              }
-              className="rounded-lg border border-slate-600 px-4 py-2 font-semibold hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-40"
+        {isCommissioner && (
+        <button
+            type="button"
+            onClick={undoLastPick}
+            disabled={
+              picks.length === 0 ||
+              isUndoing ||
+              isSubmitting
+            }
+            className="rounded-lg border border-slate-600 px-4 py-2 font-semibold disabled:opacity-40"
             >
-              {isUndoing ? "Undoing..." : "Undo Last Pick"}
-            </button>
+            {isUndoing
+              ? "Undoing..."
+              : "Undo Last Pick"}
+        </button>
+        )}
 
             <form action="/logout" method="post">
                 <button
@@ -655,6 +675,7 @@ export function DraftBoard({
           players={availablePlayers}
           onDraftPlayer={draftPlayer}
           isDrafting={isSubmitting}
+          canDraft={canDraft}
         />
       </div>
     </div>

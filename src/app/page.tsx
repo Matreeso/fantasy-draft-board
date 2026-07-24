@@ -6,6 +6,7 @@ import type {
   DraftPick,
   DraftTeam,
   Player,
+  DraftMember,
 } from "@/types/draft";
 
 import { redirect } from "next/navigation";
@@ -36,7 +37,33 @@ export default async function HomePage() {
   if (error || !data?.claims?.sub) {
     redirect("/login");
   }
+
+  const userId = data.claims.sub;
+  const membershipResult = await supabase
+  .from("draft_members")
+  .select(
+    "id, draft_id, user_id, role, draft_team_id",
+  )
+  .eq("draft_id", TEST_DRAFT_ID)
+  .eq("user_id", userId)
+  .maybeSingle();
+  if (!membershipResult.data) {
+    return (
+      <main className="min-h-screen bg-slate-950 p-8 text-white">
+        <div className="mx-auto max-w-3xl">
+          <h1 className="text-3xl font-bold">
+            Access denied
+          </h1>
   
+          <p className="mt-4 text-slate-400">
+            You are logged in, but you are not a member of
+            this draft.
+          </p>
+        </div>
+      </main>
+    );
+  }
+
   const [
     playersResult,
     teamsResult,
@@ -184,6 +211,7 @@ export default async function HomePage() {
           initialTeams={teams}
           initialPicks={formattedPicks}
           teamCount={teams.length || 4}
+          currentMember={membershipResult.data as DraftMember}
         />
       </div>
     </main>

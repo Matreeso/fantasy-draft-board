@@ -31,50 +31,77 @@ type CreatedPick = {
 };
 
 function getErrorResponse(message: string) {
-  switch (message) {
-    case "DRAFT_NOT_FOUND":
-      return {
-        status: 404,
-        error: "DRAFT_NOT_FOUND",
-        message: "The requested draft does not exist.",
-      };
-
-    case "DRAFT_NOT_ACTIVE":
-      return {
-        status: 409,
-        error: "DRAFT_NOT_ACTIVE",
-        message: "The draft is not currently active.",
-      };
-
-    case "PLAYER_NOT_FOUND":
-      return {
-        status: 404,
-        error: "PLAYER_NOT_FOUND",
-        message: "The requested player does not exist.",
-      };
-
-    case "PLAYER_ALREADY_DRAFTED":
-      return {
-        status: 409,
-        error: "PLAYER_ALREADY_DRAFTED",
-        message: "That player has already been drafted.",
-      };
-
-    case "DRAFT_TEAM_NOT_FOUND":
-      return {
-        status: 409,
-        error: "DRAFT_TEAM_NOT_FOUND",
-        message:
-          "No fantasy team exists for the current draft position.",
-      };
-
-    default:
-      return {
-        status: 500,
-        error: "PICK_CREATE_FAILED",
-        message: "The pick could not be created.",
-      };
+  if (message.includes("DRAFT_NOT_FOUND")) {
+    return {
+      status: 404,
+      error: "DRAFT_NOT_FOUND",
+      message: "The requested draft does not exist.",
+    };
   }
+
+  if (message.includes("NOT_A_DRAFT_MEMBER")) {
+    return {
+      status: 403,
+      error: "NOT_A_DRAFT_MEMBER",
+      message: "You are not a member of this draft.",
+    };
+  }
+
+  if (message.includes("SPECTATORS_CANNOT_DRAFT")) {
+    return {
+      status: 403,
+      error: "SPECTATORS_CANNOT_DRAFT",
+      message: "Spectators cannot submit draft picks.",
+    };
+  }
+
+  if (message.includes("NOT_YOUR_TURN")) {
+    return {
+      status: 403,
+      error: "NOT_YOUR_TURN",
+      message:
+        "You can only draft when your team is on the clock.",
+    };
+  }
+
+  if (message.includes("DRAFT_NOT_ACTIVE")) {
+    return {
+      status: 409,
+      error: "DRAFT_NOT_ACTIVE",
+      message: "The draft is not currently active.",
+    };
+  }
+
+  if (message.includes("PLAYER_NOT_FOUND")) {
+    return {
+      status: 404,
+      error: "PLAYER_NOT_FOUND",
+      message: "The requested player does not exist.",
+    };
+  }
+
+  if (message.includes("PLAYER_ALREADY_DRAFTED")) {
+    return {
+      status: 409,
+      error: "PLAYER_ALREADY_DRAFTED",
+      message: "That player has already been drafted.",
+    };
+  }
+
+  if (message.includes("DRAFT_TEAM_NOT_FOUND")) {
+    return {
+      status: 409,
+      error: "DRAFT_TEAM_NOT_FOUND",
+      message:
+        "The team for the current pick was not found.",
+    };
+  }
+
+  return {
+    status: 500,
+    error: "PICK_CREATE_FAILED",
+    message: "The pick could not be created.",
+  };
 }
 
 export async function POST(
@@ -156,6 +183,7 @@ export async function POST(
       {
         requested_draft_id: draftId,
         requested_player_id: playerId,
+        requested_user_id: userId,
       },
     );
 
@@ -252,6 +280,7 @@ export async function DELETE(
       "undo_last_draft_pick",
       {
         requested_draft_id: draftId,
+        requested_user_id: userId,
       },
     );
 
@@ -265,6 +294,27 @@ export async function DELETE(
             message: "The requested draft does not exist.",
           },
           { status: 404 },
+        );
+      }
+
+      if (error.message.includes("NOT_A_DRAFT_MEMBER")) {
+        return NextResponse.json(
+          {
+            error: "NOT_A_DRAFT_MEMBER",
+            message: "You are not a member of this draft.",
+          },
+          { status: 403 },
+        );
+      }
+      
+      if (error.message.includes("COMMISSIONER_REQUIRED")) {
+        return NextResponse.json(
+          {
+            error: "COMMISSIONER_REQUIRED",
+            message:
+              "Only the commissioner can undo picks.",
+          },
+          { status: 403 },
         );
       }
 

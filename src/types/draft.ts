@@ -33,3 +33,16 @@ export type Player = {
     player: Player;
     draftTeam: DraftTeam;
   };
+
+  export type DraftMemberRole =
+  | "commissioner"
+  | "team_owner"
+  | "spectator";
+
+export type DraftMember = {
+  id: number;
+  draft_id: number;
+  user_id: string;
+  role: DraftMemberRole;
+  draft_team_id: number | null;
+};
