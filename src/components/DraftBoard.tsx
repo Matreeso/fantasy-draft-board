@@ -3,7 +3,9 @@
 import { useEffect, useMemo, useState, useCallback } from "react";
 
 import { PlayerList } from "@/components/PlayerList";
-import { supabase } from "@/lib/supabase/client";
+import {
+    createClient,
+} from "@/lib/supabase/client";
 import type {
   DraftPick,
   DraftTeam,
@@ -69,6 +71,10 @@ export function DraftBoard({
   initialTeams = [],
   teamCount = 4,
 }: DraftBoardProps) {
+    const supabase = useMemo(
+        () => createClient(),
+        [],
+      );
   const [picks, setPicks] =
     useState<DraftPick[]>(initialPicks);
 
@@ -463,6 +469,15 @@ export function DraftBoard({
             >
               {isUndoing ? "Undoing..." : "Undo Last Pick"}
             </button>
+
+            <form action="/logout" method="post">
+                <button
+                  type="submit"
+                  className="rounded-lg border border-slate-600 px-4 py-2 text-sm font-semibold"
+                >
+                  Log out
+                </button>
+            </form>
           
             <div className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-3">
               <p className="text-sm text-slate-400">

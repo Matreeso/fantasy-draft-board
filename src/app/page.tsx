@@ -1,10 +1,14 @@
 import { DraftBoard } from "@/components/DraftBoard";
-import { supabase } from "@/lib/supabase/client";
+import {
+  createClient,
+} from "@/lib/supabase/server";
 import type {
   DraftPick,
   DraftTeam,
   Player,
 } from "@/types/draft";
+
+import { redirect } from "next/navigation";
 
 /*
  * Replace this number if your test draft has a different ID.
@@ -24,6 +28,15 @@ export default async function HomePage() {
    * These three database requests do not depend on each other,
    * so Promise.all runs them at the same time.
    */
+  const supabase = await createClient();
+
+  const { data, error } =
+    await supabase.auth.getClaims();
+
+  if (error || !data?.claims?.sub) {
+    redirect("/login");
+  }
+  
   const [
     playersResult,
     teamsResult,

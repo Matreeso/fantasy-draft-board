@@ -2,6 +2,10 @@ import { NextResponse } from "next/server";
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
+import {
+  createClient,
+} from "@/lib/supabase/server";
+
 type DeletedPick = {
   id: number;
   draft_id: number;
@@ -82,6 +86,22 @@ export async function POST(
   },
 ) {
   try {
+    const supabase = await createClient();
+
+    const { data:authData, error:authError } =
+      await supabase.auth.getClaims();
+
+    const userId = authData?.claims?.sub;
+
+    if (authError || !userId) {
+      return NextResponse.json(
+        {
+          error: "UNAUTHORIZED",
+          message: "You must be logged in.",
+        },
+        { status: 401 },
+      );
+    }
     const { draftId: draftIdText } = await params;
     const draftId = Number(draftIdText);
 
@@ -199,6 +219,22 @@ export async function DELETE(
   },
 ) {
   try {
+    const supabase = await createClient();
+    
+    const { data:authData, error:authError } =
+      await supabase.auth.getClaims();
+
+    const userId = authData?.claims?.sub;
+
+    if (authError || !userId) {
+      return NextResponse.json(
+        {
+          error: "UNAUTHORIZED",
+          message: "You must be logged in.",
+        },
+        { status: 401 },
+      );
+    }
     const { draftId: draftIdText } = await params;
     const draftId = Number(draftIdText);
 
