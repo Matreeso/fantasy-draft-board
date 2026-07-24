@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useCallback } from "react";
 
 import { PlayerList } from "@/components/PlayerList";
 import { supabase } from "@/lib/supabase/client";
@@ -10,12 +10,42 @@ import type {
   Player,
 } from "@/types/draft";
 
+type PickRow = {
+    id: number;
+    draft_id: number;
+    draft_team_id: number;
+    player_id: number;
+    pick_number: number;
+    round_number: number;
+    created_at: string;
+};
+  
+type LoadPicksResponse = {
+  picks?: PickRow[];
+  error?: string;
+  message?: string;
+};
+
 type DraftBoardProps = {
   draftId: number;
   initialPlayers: Player[];
   initialPicks?: DraftPick[];
   initialTeams?: DraftTeam[];
   teamCount?: number;
+};
+
+type UndoPickResponse = {
+    pick?: {
+      id: number;
+      draft_id: number;
+      draft_team_id: number;
+      player_id: number;
+      pick_number: number;
+      round_number: number;
+      created_at: string;
+    };
+    error?: string;
+    message?: string;
 };
 
 type CreatePickResponse = {
@@ -51,6 +81,8 @@ export function DraftBoard({
     const [realtimeStatus, setRealtimeStatus] =
     useState("CONNECTING");
 
+    const [isUndoing, setIsUndoing] = useState(false);
+
   /*
    * If real teams were loaded from Supabase, use them.
    * Otherwise, create temporary Team 1, Team 2, etc. objects.
@@ -78,79 +110,143 @@ export function DraftBoard({
 
   const actualTeamCount = teams.length;
 
+  const reloadPicks = useCallback(async () => {
+  try {
+    const response = await fetch(
+      `/api/drafts/${draftId}/picks`,
+      {
+        method: "GET",
+        cache: "no-store",
+      },
+    );
+
+    const result =
+      (await response.json()) as LoadPicksResponse;
+
+    if (!response.ok || !result.picks) {
+      throw new Error(
+        result.message ?? "Could not reload draft picks.",
+      );
+    }
+
+    const completePicks: DraftPick[] = [];
+
+    for (const pickRow of result.picks) {
+      const player = initialPlayers.find(
+        (candidate) =>
+          candidate.id === pickRow.player_id,
+      );
+
+      const draftTeam = teams.find(
+        (candidate) =>
+          candidate.id === pickRow.draft_team_id,
+      );
+
+      if (!player || !draftTeam) {
+        console.error(
+          "Could not connect a pick to its player or team:",
+          pickRow,
+        );
+
+        continue;
+      }
+
+      completePicks.push({
+        ...pickRow,
+        player,
+        draftTeam,
+      });
+    }
+
+    setPicks(completePicks);
+    setErrorMessage(null);
+  } catch (error) {
+    console.error("Reload picks failed:", error);
+
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Could not reload draft picks.";
+
+    setErrorMessage(message);
+  }
+    }, [draftId, initialPlayers, teams]);
+
   useEffect(() => {
+    let reloadTimer: ReturnType<typeof setTimeout> | null =
+      null;
+  
+    function scheduleReload() {
+      /*
+       * A transaction or rapid sequence of events could produce
+       * several notifications close together.
+       *
+       * Waiting briefly combines them into one reload.
+       */
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+      }
+  
+      reloadTimer = setTimeout(() => {
+        void reloadPicks();
+      }, 100);
+    }
+  
     const channel = supabase
       .channel(`draft-${draftId}-picks`)
       .on(
         "postgres_changes",
         {
-          event: "INSERT",
+          event: "*",
           schema: "public",
           table: "picks",
           filter: `draft_id=eq.${draftId}`,
         },
         (payload) => {
-          const insertedPick = payload.new as {
-            id: number;
-            draft_id: number;
-            draft_team_id: number;
-            player_id: number;
-            pick_number: number;
-            round_number: number;
-            created_at: string;
-          };
-  
-          const player = initialPlayers.find(
-            (candidate) =>
-              candidate.id === insertedPick.player_id,
-          );
-  
-          const draftTeam = teams.find(
-            (candidate) =>
-              candidate.id === insertedPick.draft_team_id,
-          );
-  
-          if (!player || !draftTeam) {
-            console.error(
-              "Realtime pick is missing its player or team.",
-              insertedPick,
-            );
-  
-            return;
-          }
-  
-          const completePick: DraftPick = {
-            ...insertedPick,
-            player,
-            draftTeam,
-          };
-  
-          setPicks((currentPicks) => {
-            const pickAlreadyExists = currentPicks.some(
-              (pick) => pick.id === completePick.id,
-            );
-  
-            if (pickAlreadyExists) {
-              return currentPicks;
-            }
-  
-            return [...currentPicks, completePick].sort(
-              (firstPick, secondPick) =>
-                firstPick.pick_number -
-                secondPick.pick_number,
-            );
-          });
+          console.log("Realtime picks event:", payload);
+          scheduleReload();
         },
       )
-      .subscribe((status) => {
-        console.log("Draft Realtime status:", status);
+      .subscribe((status, error) => {
+        console.log(
+          "Draft Realtime status:",
+          status,
+          error,
+        );
+  
         setRealtimeStatus(status);
+  
+        if (
+          status === "CHANNEL_ERROR" ||
+          status === "TIMED_OUT"
+        ) {
+          console.error(
+            "Draft Realtime subscription failed:",
+            error,
+          );
+  
+          setErrorMessage(
+            "Live updates disconnected. Refreshing the page will still show saved picks.",
+          );
+        }
+  
+        if (status === "SUBSCRIBED") {
+          /*
+           * Reload once after connecting in case a change happened
+           * between the initial page load and subscription startup.
+           */
+          void reloadPicks();
+        }
       });
   
     return () => {
+      if (reloadTimer) {
+        clearTimeout(reloadTimer);
+      }
+  
       void supabase.removeChannel(channel);
     };
-  }, [draftId, initialPlayers, teams]);
+  }, [draftId, reloadPicks]);
 
   /*
    * Find the highest existing pick number.
@@ -268,27 +364,7 @@ export function DraftBoard({
        * We already have the complete player and team objects,
        * so we combine them into one DraftPick for the interface.
        */
-      const newPick: DraftPick = {
-        ...result.pick,
-        player,
-        draftTeam: currentTeam,
-      };
-
-      setPicks((currentPicks) => {
-        const alreadyExists = currentPicks.some(
-          (pick) => pick.id === newPick.id,
-        );
-
-        if (alreadyExists) {
-          return currentPicks;
-        }
-
-        return [...currentPicks, newPick].sort(
-          (firstPick, secondPick) =>
-            firstPick.pick_number -
-            secondPick.pick_number,
-        );
-      });
+      await reloadPicks();
     } catch (error) {
       const message =
         error instanceof Error
@@ -298,6 +374,44 @@ export function DraftBoard({
       setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
+    }
+  }
+
+  async function undoLastPick() {
+    if (isUndoing || isSubmitting || picks.length === 0) {
+      return;
+    }
+  
+    setIsUndoing(true);
+    setErrorMessage(null);
+  
+    try {
+      const response = await fetch(
+        `/api/drafts/${draftId}/picks`,
+        {
+          method: "DELETE",
+        },
+      );
+  
+      const result =
+        (await response.json()) as UndoPickResponse;
+  
+      if (!response.ok || !result.pick) {
+        throw new Error(
+          result.message ?? "Could not undo the last pick.",
+        );
+      }
+  
+      await reloadPicks();
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not undo the last pick.";
+  
+      setErrorMessage(message);
+    } finally {
+      setIsUndoing(false);
     }
   }
 
@@ -336,14 +450,29 @@ export function DraftBoard({
           </p>
         </div>
 
-        <div className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-3">
-          <p className="text-sm text-slate-400">
-            Completed picks
-          </p>
-
-          <p className="text-2xl font-bold">
-            {picks.length}
-          </p>
+        <div className="flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={undoLastPick}
+              disabled={
+                picks.length === 0 ||
+                isUndoing ||
+                isSubmitting
+              }
+              className="rounded-lg border border-slate-600 px-4 py-2 font-semibold hover:border-slate-400 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {isUndoing ? "Undoing..." : "Undo Last Pick"}
+            </button>
+          
+            <div className="rounded-lg border border-slate-700 bg-slate-900 px-4 py-3">
+              <p className="text-sm text-slate-400">
+                Completed picks
+              </p>
+          
+              <p className="text-2xl font-bold">
+                {picks.length}
+              </p>
+            </div>
         </div>
       </header>
 
