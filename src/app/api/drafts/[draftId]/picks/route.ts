@@ -2,156 +2,160 @@ import { NextResponse } from "next/server";
 
 import { supabaseAdmin } from "@/lib/supabase/admin";
 
-type RouteContext = {
-  params: Promise<{
-    draftId: string;
-  }>;
+type CreatePickRequest = {
+  playerId?: unknown;
 };
 
-type CreatePickBody = {
-  playerId?: number;
+type CreatedPick = {
+  id: number;
+  draft_id: number;
+  draft_team_id: number;
+  player_id: number;
+  pick_number: number;
+  round_number: number;
+  created_at: string;
 };
+
+function getErrorResponse(message: string) {
+  switch (message) {
+    case "DRAFT_NOT_FOUND":
+      return {
+        status: 404,
+        error: "DRAFT_NOT_FOUND",
+        message: "The requested draft does not exist.",
+      };
+
+    case "DRAFT_NOT_ACTIVE":
+      return {
+        status: 409,
+        error: "DRAFT_NOT_ACTIVE",
+        message: "The draft is not currently active.",
+      };
+
+    case "PLAYER_NOT_FOUND":
+      return {
+        status: 404,
+        error: "PLAYER_NOT_FOUND",
+        message: "The requested player does not exist.",
+      };
+
+    case "PLAYER_ALREADY_DRAFTED":
+      return {
+        status: 409,
+        error: "PLAYER_ALREADY_DRAFTED",
+        message: "That player has already been drafted.",
+      };
+
+    case "DRAFT_TEAM_NOT_FOUND":
+      return {
+        status: 409,
+        error: "DRAFT_TEAM_NOT_FOUND",
+        message:
+          "No fantasy team exists for the current draft position.",
+      };
+
+    default:
+      return {
+        status: 500,
+        error: "PICK_CREATE_FAILED",
+        message: "The pick could not be created.",
+      };
+  }
+}
 
 export async function POST(
   request: Request,
-  context: RouteContext,
+  {
+    params,
+  }: {
+    params: Promise<{ draftId: string }>;
+  },
 ) {
   try {
-    const { draftId: draftIdText } = await context.params;
+    const { draftId: draftIdText } = await params;
     const draftId = Number(draftIdText);
 
     if (!Number.isInteger(draftId) || draftId < 1) {
       return NextResponse.json(
         {
           error: "INVALID_DRAFT_ID",
-          message: "The draft ID is invalid.",
+          message: "The draft ID must be a positive integer.",
         },
         { status: 400 },
       );
     }
 
-    const body = (await request.json()) as CreatePickBody;
-    const playerId = body.playerId;
+    let body: CreatePickRequest;
 
-    if (!Number.isInteger(playerId) || Number(playerId) < 1) {
+    try {
+      body = (await request.json()) as CreatePickRequest;
+    } catch {
+      return NextResponse.json(
+        {
+          error: "INVALID_JSON",
+          message: "The request body must contain valid JSON.",
+        },
+        { status: 400 },
+      );
+    }
+
+    const playerId = Number(body.playerId);
+
+    if (!Number.isInteger(playerId) || playerId < 1) {
       return NextResponse.json(
         {
           error: "INVALID_PLAYER_ID",
-          message: "A valid player ID is required.",
+          message: "The player ID must be a positive integer.",
         },
         { status: 400 },
       );
     }
 
-    const { data: draft, error: draftError } =
-      await supabaseAdmin
-        .from("drafts")
-        .select(
-          "id, team_count, current_pick_number, status",
-        )
-        .eq("id", draftId)
-        .single();
-
-    if (draftError || !draft) {
-      return NextResponse.json(
-        {
-          error: "DRAFT_NOT_FOUND",
-          message: "The draft could not be found.",
-        },
-        { status: 404 },
-      );
-    }
-
-    if (draft.status !== "active") {
-      return NextResponse.json(
-        {
-          error: "DRAFT_NOT_ACTIVE",
-          message: "The draft is not currently active.",
-        },
-        { status: 409 },
-      );
-    }
-
-    const pickNumber = draft.current_pick_number;
-    const roundNumber = Math.ceil(
-      pickNumber / draft.team_count,
+    /*
+     * Call the PostgreSQL function.
+     *
+     * The function:
+     * 1. Locks the draft.
+     * 2. Validates the draft and player.
+     * 3. Calculates snake order.
+     * 4. Inserts the pick.
+     * 5. Advances current_pick_number.
+     */
+    const { data, error } = await supabaseAdmin.rpc(
+      "create_draft_pick",
+      {
+        requested_draft_id: draftId,
+        requested_player_id: playerId,
+      },
     );
 
-    const positionInsideRound =
-      (pickNumber - 1) % draft.team_count;
+    if (error) {
+      console.error("create_draft_pick failed:", error);
 
-    const isReverseRound = roundNumber % 2 === 0;
+      const knownError = getErrorResponse(error.message);
 
-    const draftPosition = isReverseRound
-      ? draft.team_count - positionInsideRound
-      : positionInsideRound + 1;
-
-    const { data: draftTeam, error: teamError } =
-      await supabaseAdmin
-        .from("draft_teams")
-        .select("id")
-        .eq("draft_id", draftId)
-        .eq("draft_position", draftPosition)
-        .single();
-
-    if (teamError || !draftTeam) {
       return NextResponse.json(
         {
-          error: "TEAM_NOT_FOUND",
+          error: knownError.error,
+          message: knownError.message,
+        },
+        { status: knownError.status },
+      );
+    }
+
+    /*
+     * A set-returning PostgreSQL function returns an array.
+     * We expect exactly one created pick.
+     */
+    const createdPicks = data as CreatedPick[] | null;
+    const createdPick = createdPicks?.[0];
+
+    if (!createdPick) {
+      return NextResponse.json(
+        {
+          error: "EMPTY_PICK_RESULT",
           message:
-            "The team for the current draft position was not found.",
-        },
-        { status: 409 },
-      );
-    }
-
-    const { data: newPick, error: pickError } =
-      await supabaseAdmin
-        .from("picks")
-        .insert({
-          draft_id: draftId,
-          draft_team_id: draftTeam.id,
-          player_id: playerId,
-          pick_number: pickNumber,
-          round_number: roundNumber,
-        })
-        .select(
-          "id, draft_id, draft_team_id, player_id, pick_number, round_number, created_at",
-        )
-        .single();
-
-    if (pickError) {
-      const isDuplicate =
-        pickError.code === "23505";
-
-      return NextResponse.json(
-        {
-          error: isDuplicate
-            ? "DUPLICATE_PICK"
-            : "PICK_CREATE_FAILED",
-          message: isDuplicate
-            ? "That player or pick number has already been used."
-            : pickError.message,
-        },
-        {
-          status: isDuplicate ? 409 : 500,
-        },
-      );
-    }
-
-    const { error: updateError } = await supabaseAdmin
-      .from("drafts")
-      .update({
-        current_pick_number: pickNumber + 1,
-      })
-      .eq("id", draftId)
-      .eq("current_pick_number", pickNumber);
-
-    if (updateError) {
-      return NextResponse.json(
-        {
-          error: "DRAFT_UPDATE_FAILED",
-          message: updateError.message,
+            "The database did not return the created pick.",
         },
         { status: 500 },
       );
@@ -159,17 +163,17 @@ export async function POST(
 
     return NextResponse.json(
       {
-        pick: newPick,
+        pick: createdPick,
       },
       { status: 201 },
     );
   } catch (error) {
-    console.error(error);
+    console.error("Unexpected pick API error:", error);
 
     return NextResponse.json(
       {
         error: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
+        message: "An unexpected server error occurred.",
       },
       { status: 500 },
     );
